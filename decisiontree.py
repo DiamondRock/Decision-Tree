@@ -222,9 +222,6 @@ class DecisionTree:
             if not flag:
                 continue
             label_counts[labels[row]] += 1
-
-        if sum(label_counts.values()) == 0:
-            pass
         majority_label = max(label_counts.keys(), key=(lambda key: label_counts[key]))
         majority_label_count = label_counts[majority_label]
         return majority_label, majority_label_count
