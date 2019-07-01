@@ -15,9 +15,23 @@ class Node:
 class DecisionTree:
     def __init__(self):
         self.root = None
+        self.labels_unique_values = []
+        self.labels_unique_values_counts = []
+        self.features_unique_values = []
+        self.max_depth = None
 
-    def build(self, labels, data_points):
-        self.root = self.build_tree_from_parent(None, labels, data_points, [], [])
+    @staticmethod
+    def return_features_unique_values(data_points):
+        feature_unique_values = []
+        for i in range(data_points.shape[1]):
+            feature_unique_values.append(np.unique(data_points[:, i]))
+        return feature_unique_values
+
+    def build(self, labels, data_points, max_depth=None):
+        (self.labels_unique_values, self.labels_unique_values_counts) = np.unique(labels, return_counts=True)
+        self.features_unique_values = DecisionTree.return_features_unique_values(data_points)
+        self.max_depth = max_depth
+        self.root = self.build_tree_from_parent(None, labels, data_points, [], [], -1)
 
     def predict(self, data_point):
         return self.predict_from_node(self.root, data_point)
@@ -26,7 +40,7 @@ class DecisionTree:
         self.print_tree_from_node(self.root, 0, label_names=label_names, feature_names=feature_names,
                                   feature_values=feature_values)
 
-    def build_tree_from_parent(self, parent, labels, data_points, features, features_values):
+    def build_tree_from_parent(self, parent, labels, data_points, features, features_values, depth):
         if parent is not None:
             pure_label, no_data_left = DecisionTree.pure_label_no_data_left(labels, data_points, features,
                                                                             features_values)
@@ -35,8 +49,9 @@ class DecisionTree:
                 parent_value = features_values[-1]
                 features.pop()
                 features_values.pop()
-                majority_label, majority_label_count = DecisionTree.return_majority(labels, data_points, features,
-                                                                                    features_values)
+                majority_label, majority_label_count = \
+                    DecisionTree.return_majority(labels, data_points,
+                                                 self.labels_unique_values, features, features_values)
                 features.append(parent_name)
                 features_values.append(parent_value)
                 node = Node(majority_label)
@@ -46,19 +61,29 @@ class DecisionTree:
                 node = Node(pure_label)
                 parent.children.append(node)
                 return node
+            if self.max_depth == depth:
+                majority_label, majority_label_count = \
+                    self.return_majority(labels, data_points, self.labels_unique_values, features, features_values)
+                node = Node(majority_label)
+                parent.children.append(node)
+                return node
+
         left_features = DecisionTree.return_left_features(data_points, features)
         if len(left_features) == 1:
             left_feature = left_features[0]
             node = Node(left_feature)
-            node.split_values = np.unique(data_points[:, left_feature])
-            node = DecisionTree.make_terminal_nodes(node, labels, data_points, features, features_values)
+            node.split_values = self.features_unique_values[left_feature]
+            node = DecisionTree.make_terminal_nodes(node, labels, data_points,
+                                                    self.labels_unique_values, features, features_values)
             if parent is not None:
                 parent.children.append(node)
             return node
         min_entropy = float("inf")
         min_entropy_index = -1
         for i in left_features:
-            entropy = DecisionTree.con_entropy(labels, data_points, i, cols=features, cols_values=features_values)
+            entropy = DecisionTree.con_entropy(labels, data_points,
+                                               self.labels_unique_values, i, self.features_unique_values[i],
+                                               given_cols=features, given_cols_values=features_values)
             if entropy < min_entropy:
                 min_entropy = entropy
                 min_entropy_index = i
@@ -67,14 +92,15 @@ class DecisionTree:
         node = Node(min_entropy_index)
         node.split_values = np.unique(data_points[:, min_entropy_index])
         if min_entropy == 0:
-            node = DecisionTree.make_terminal_nodes(node, labels, data_points, features, features_values)
+            node = DecisionTree.make_terminal_nodes(node, labels, data_points,
+                                                    self.labels_unique_values, features, features_values)
             if parent is not None:
                 parent.children.append(node)
             return node
         features.append(min_entropy_index)
         for split_value in node.split_values:
             features_values.append(split_value)
-            self.build_tree_from_parent(node, labels, data_points, features, features_values)
+            self.build_tree_from_parent(node, labels, data_points, features, features_values, depth + 1)
             features_values.pop()
         features.pop()
         if parent is not None:
@@ -112,15 +138,17 @@ class DecisionTree:
             self.print_tree_from_node(node.children[i], cur_depth + 2, label_names, feature_names, feature_values)
 
     @staticmethod
-    def make_terminal_nodes(node, labels, data_points, features, features_values):
+    def make_terminal_nodes(node, labels, data_points, labels_values, features, features_values):
         features.append(node.name)
         for value in node.split_values:
             features_values.append(value)
-            majority_label, majority_label_count = DecisionTree.return_majority(labels, data_points, features, features_values)
+            majority_label, majority_label_count =\
+                DecisionTree.return_majority(labels, data_points, labels_values, features, features_values)
             if majority_label_count == 0:
                 features_values.pop()
                 features.pop()
-                majority_label, majority_label_count = DecisionTree.return_majority(labels, data_points, features, features_values)
+                majority_label, majority_label_count = \
+                    DecisionTree.return_majority(labels, data_points, labels_values, features, features_values)
                 features.append(node.name)
                 features_values.append(value)
             terminal_node = Node(majority_label)
@@ -149,10 +177,8 @@ class DecisionTree:
         return first_label, False
 
     @staticmethod
-    def con_entropy(labels, data_points, con_col, cols=[], cols_values=[]):
+    def con_entropy(labels, data_points, label_values, con_col, con_col_values, given_cols=[], given_cols_values=[]):
         result = 0
-        label_values, label_counts = np.unique(labels, return_counts=True)
-        con_col_values = np.unique(data_points[:, con_col])
         con_col_counts = {}
         for con_col_value in con_col_values:
             con_col_counts[con_col_value] = 0
@@ -163,8 +189,8 @@ class DecisionTree:
                 joint_counts[(label_value, col_value)] = 0
         for row in range(total_num):
             flag = False
-            for i in range(len(cols)):
-                if data_points[row, cols[i]] != cols_values[i]:
+            for i in range(len(given_cols)):
+                if data_points[row, given_cols[i]] != given_cols_values[i]:
                     flag = True
                     break
             if flag:
@@ -183,8 +209,7 @@ class DecisionTree:
         return result
 
     @staticmethod
-    def return_majority(labels, data_points, features, features_values):
-        label_values = np.unique(labels)
+    def return_majority(labels, data_points, label_values, features, features_values):
         label_counts = {}
         for label_value in label_values:
             label_counts[label_value] = 0
@@ -222,7 +247,7 @@ def read_data(file_name, label_col):
     return result[:, label_col], np.delete(result, label_col, 1)
 
 
-def read_full_features_and_values_for_uci_mushroom_dataset(file_name):
+def read_full_labels_features_and_values_for_uci_mushroom_dataset(file_name):
     def fill_feature_values(value_key_pairs_str, feature_names, feature_values):
         value_key_pairs = value_key_pairs_str.split(",")
         for entry in value_key_pairs:
@@ -231,14 +256,25 @@ def read_full_features_and_values_for_uci_mushroom_dataset(file_name):
             [value, key] = entry.split('=')
             feature_values[(feature_names[-1], key)] = value
 
+    def fill_label_names(value_key_pairs_str, label_names):
+        value_key_pairs = value_key_pairs_str.split(",")
+        for entry in value_key_pairs:
+            if entry == '':
+                continue
+            [value, key] = entry.split('=')
+            label_names[key] = value
+
     file = open(file_name, "r")
     feature_names = []
     feature_values = {}
+    label_names = {}
+    import re
     while True:
         line = file.readline().strip()
-        if line.startswith("7. Attribute Information"):
+        match_obj = re.match(r'^7\. Attribute Information\: \(classes\: (.*)\)\s*$', line)
+        if match_obj:
+            fill_label_names(match_obj.group(1), label_names)
             break
-    import re
     line = file.readline()
     while True:
         match_obj = re.match(r'^\s+\d+\. (.*)\:\s+(.+),?\n$', line)
@@ -257,7 +293,7 @@ def read_full_features_and_values_for_uci_mushroom_dataset(file_name):
         if flag:
             break
     file.close()
-    return feature_names, feature_values
+    return label_names, feature_names, feature_values
 
 
 def predict_all(decision_tree, data_points):
@@ -278,11 +314,9 @@ def accuracy(true_labels, predicted_labels):
 if __name__ == "__main__":
     training_labels, training_data_points = read_data('mush_train.data', 0)
     test_labels, test_data_points = read_data("mush_test.data", 0)
-    feature_names, feature_values = read_full_features_and_values_for_uci_mushroom_dataset("agaricus-lepiota.names")
-    label_names = {"p": "poisonous", "e": "edible"}
+    label_names, feature_names, feature_values = \
+        read_full_labels_features_and_values_for_uci_mushroom_dataset("agaricus-lepiota.names")
     decision_tree = DecisionTree()
-    decision_tree.build(training_labels, training_data_points)
+    decision_tree.build(training_labels, training_data_points, 4)
     decision_tree.print(label_names=label_names, feature_names=feature_names, feature_values=feature_values)
-    # decision_tree.print(label_names=label_names, feature_names=feature_names)
-    # print(list(zip(test_labels, predict_all(decision_tree, test_data_points))))
     print("Test accuracy: {}%".format(accuracy(test_labels, predict_all(decision_tree, test_data_points))))
